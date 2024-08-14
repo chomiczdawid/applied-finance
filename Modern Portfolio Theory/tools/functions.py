@@ -1,83 +1,151 @@
 import numpy as np
 import pandas as pd
 from scipy.stats import skew, kurtosis, shapiro
+import yfinance as yf
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+
+def get_stock_data(stocks, colnames, start, end, filename="prices"):
+    prices = yf.download(stocks, start = start, end = end)['Adj Close']
+    prices.columns = colnames
+    prices.to_pickle("{}.pkl".format(filename))
+    
+def load_data(filename="prices"):
+    prices = pd.read_pickle("{}.pkl".format(filename))
+    returns = prices.pct_change().dropna()
+    return prices, returns
+
 def eda_stats(df):
     for column in df.columns:
+        # Format the column name: replace underscores with spaces and capitalize the first letter of each word
+        formatted_column_name = column.replace('_', ' ').title()
+        
         print("-------------------------------------------")
-        print("-- Statistics for {}".format(df[column].name))
+        print("-- Statistics for {}".format(formatted_column_name))
         print("-------------------------------------------")
-        # Average annualized return assuming 252 traiding days in a year
-        print("Average annualized return:", ((1+np.mean(df[column]))**252)-1)
+        
+        # Average annualized return assuming 252 trading days in a year
+        average_annualized_return = ((1 + np.mean(df[column].dropna())) ** 252) - 1
+        print("Average annualized return:", average_annualized_return)
+        
         # Annualized volatility
-        print("Annualized volatility (std):", np.std(df[column]) * np.sqrt(252))
+        annualized_volatility = np.std(df[column].dropna()) * np.sqrt(252)
+        print("Annualized volatility (std):", annualized_volatility)
+        
         # Skewness of the distribution
-        print("Skewness:", skew(df[column].dropna()))
-        # Calculate excess kurtosis (for normal kurtosis add 3 to result). Excess kurtosis greater than 0 means non-normality of dist. Higher kurtois means higher risk.
-        print("Excess kurtosis:", kurtosis(df[column].dropna()))
+        skewness = skew(df[column].dropna())
+        print("Skewness:", skewness)
+        
+        # Excess kurtosis
+        excess_kurtosis = kurtosis(df[column].dropna())
+        print("Excess kurtosis:", excess_kurtosis)
+        
+        # Shapiro-Wilk test for normality
         print("Shapiro-Wilk test for normality")
-        # testing for normality
-        # if kurtosis is greater than 3 and skewness is non zero, distribution is probably not normal.
-        # To estimate probability of normal dist use Shapiro-Wilk test
         p_value = shapiro(df[column].dropna())[1]
         if p_value <= 0.05:
             print("Null hypothesis of normality is rejected.")
         else:
             print("Null hypothesis of normality is accepted.")
+        
         print("")
 
 def corr_matrix_heatmap(correlation_matrix):
-    # Create a heatmap
+    """
+    Generates a heatmap of the correlation matrix with formatted labels.
+    
+    This function creates a heatmap to visualize the correlation matrix between different assets or variables. 
+    The column and row labels are formatted by replacing underscores with spaces and capitalizing the first letter of each word.
+    
+    Parameters:
+    - correlation_matrix: pandas DataFrame or 2D array-like structure containing correlation values between assets or variables.
+    
+    Output:
+    - Displays a heatmap with annotations for correlation values, color mapping, and custom label formatting.
+    """
+    
+    # Format column and row labels
+    formatted_labels = [label.replace('_', ' ').title() for label in correlation_matrix.columns]
+    
+    # Create a heatmap with formatted labels
     sns.heatmap(correlation_matrix,
                 annot=True,
                 cmap="YlGnBu", 
                 linewidths=0.3,
-                annot_kws={"size": 8})
-
+                annot_kws={"size": 8},
+                xticklabels=formatted_labels,
+                yticklabels=formatted_labels)
+    
     # Plot aesthetics
     plt.xticks(rotation=90)
     plt.yticks(rotation=0) 
+    plt.title('Correlation Matrix Heatmap')
     plt.show()
 
-def daily_returns_dist_and_ts(df):
+def daily_returns_dist_and_rolling_volatility(df, window=20):
     # Iterating through all columns in the DataFrame
     for column in df.columns:
+        # Modify the column name: replace underscores with spaces and capitalize
+        column_display_name = column.replace('_', ' ').title()
+        
         # Creating a new figure with two axes
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8, 3))
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
         
-        # Histogram for the current column
-        ax1.hist(df[column], bins=75, density=False)
-        ax1.set_title(f'Daily returns distribution of {column}')
+        # Histogram for the current column (Daily Returns Distribution)
+        ax1.hist(df[column], bins=75, density=False, color='skyblue', edgecolor='black')
+        ax1.set_title(f'Daily Returns Distribution of {column_display_name}')
+        ax1.set_xlabel('Daily Return')
+        ax1.set_ylabel('Frequency')
         
-        # Line plot for the current column
-        ax2.plot(df.index, df[column])
-        ax2.set_title(f'Daily returns time series of {column}')
+        # Calculating the rolling standard deviation (Rolling Volatility)
+        rolling_volatility = df[column].rolling(window=window).std()
+        
+        # Line plot for the rolling volatility
+        ax2.plot(df.index, rolling_volatility, color='orange')
+        ax2.set_title(f'Rolling {window}-Day Volatility of {column_display_name}')
+        ax2.set_xlabel('Date')
+        ax2.set_ylabel('Volatility')
         plt.xticks(rotation=90)
         
         # Setting a common title and displaying the plots
-        fig.suptitle(f'Column: {column}')
+        fig.suptitle(f'Distribution and Rolling Volatility: {column_display_name}', fontsize=14)
         plt.tight_layout()
         plt.show()
 
 def plot_volatility_and_returns(returns):
-    # Calculating volatility and expected annual returns
+    """
+    Plots annual volatility and expected annual returns of assets as horizontal bar charts.
+    
+    Parameters:
+    - returns: pandas DataFrame containing daily returns of assets.
+    
+    Output:
+    - Displays a plot with two horizontal bar charts: one for annual volatility and one for expected annual returns.
+    """
+    
+    # Calculate annual volatility and expected annual returns
     volatility = returns.std() * np.sqrt(252)
     expected_returns = returns.mean() * 252
+    
+    # Format labels: replace underscores with spaces and capitalize the first letter of each word
+    formatted_volatility_labels = [label.replace('_', ' ').title() for label in volatility.index]
+    formatted_returns_labels = [label.replace('_', ' ').title() for label in expected_returns.index]
     
     # Creating a subplot with two axes
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
     
     # Horizontal bar chart for volatility
     volatility.plot(kind='barh', ax=ax1, color='skyblue')
-    ax1.set_title('Volatility (Standard Deviation)')
+    ax1.set_title('Annual Volatility (Standard Deviation)')
     ax1.set_xlabel('Volatility')
+    ax1.set_yticklabels(formatted_volatility_labels)
     
     # Horizontal bar chart for expected annual returns
     expected_returns.plot(kind='barh', ax=ax2, color='lightgreen')
     ax2.set_title('Expected Annual Returns')
     ax2.set_xlabel('Expected Returns')
+    ax2.set_yticklabels(formatted_returns_labels)
     
     # Setting a common title and layout
     fig.suptitle('Volatility and Expected Annual Returns of Assets', fontsize=16)
@@ -89,9 +157,13 @@ def plot_cumulative_returns(returns, weights, columns_to_plot, ax):
     Plots the cumulative returns of selected assets and an equal-weighted portfolio.
 
     Parameters:
-    - returns: DataFrame containing the returns of individual assets.
+    - returns: DataFrame containing the daily returns of individual assets.
     - weights: Array or list of weights for the portfolio.
-    - columns_to_plot: List of columns from the returns DataFrame to include in the plot.
+    - columns_to_plot: List of column names from the returns DataFrame to include in the plot.
+    - ax: Matplotlib axis object on which to plot the cumulative returns.
+    
+    Output:
+    - Displays a plot of cumulative returns for selected assets and the portfolio.
     """
     
     # Ensure the weights are a numpy array
@@ -101,22 +173,31 @@ def plot_cumulative_returns(returns, weights, columns_to_plot, ax):
     returns_copy = returns.copy()
     
     # Calculate the equal-weighted portfolio returns
-    returns_copy['portfolio'] = returns_copy.dot(weights)
+    returns_copy['Portfolio'] = returns_copy.dot(weights)
     
     # Selecting columns to plot, including the portfolio
-    selected_columns = ['portfolio'] + columns_to_plot
+    selected_columns = ['Portfolio'] + columns_to_plot
     
-    # Calculating cumulative returns
+    # Calculate cumulative returns
     cum_returns = ((1 + returns_copy[selected_columns]).cumprod() - 1)
     
+    # Capitalize column names and replace underscores with spaces for legend
+    def format_label(label):
+        return label.replace('_', ' ').title()
+    
     # Plotting cumulative returns
-    # cum_returns.plot(figsize=(10, 5))
     cum_returns.plot(ax=ax)
+    
+    # Update the legend with formatted labels
+    handles, labels = ax.get_legend_handles_labels()
+    formatted_labels = [format_label(label) for label in labels]
+    ax.legend(handles, formatted_labels, loc='best')
+    
+    # Set plot title and labels
     ax.set_title('Cumulative Returns of Selected Assets and Portfolio')
     ax.set_xlabel('Time')
     ax.set_ylabel('Cumulative Returns')
-    ax.legend(loc='best')
-
+    
 def plot_drawdowns(prices, weights, window, ax):
     """
     Plots the daily drawdown and maximum daily drawdown in a given time window for a portfolio.
@@ -167,11 +248,13 @@ def plot_portfolio_allocation(portfolio_weights, ax):
     """
     
     # Define color mapping: green shades for bonds, orange shades for stocks, and yellow for gold
-    colors = ['lightgreen', 'green', 'yellow', 'orange', 'darkorange']
+    colors = ['green', 'lightgreen', 'yellow', 'darkorange', 'orange']
+    
+    # Format labels: replace underscores with spaces and capitalize the first letter of each word
+    formatted_labels = [label.replace('_', ' ').title() for label in portfolio_weights.index]
     
     # Create a pie chart
-    # ax.figure(figsize=(8, 4))
-    ax.pie(portfolio_weights, labels=portfolio_weights.index, autopct='%1.1f%%', colors=colors, startangle=140)
+    ax.pie(portfolio_weights, labels=formatted_labels, autopct='%1.1f%%', colors=colors, startangle=140)
     
     # Set the title
     ax.set_title('Portfolio Allocation')
@@ -209,7 +292,7 @@ def display_summary(ax, returns, weights):
     
     # Display the text on the empty axis
     ax.text(0.5, 0.5, 
-            f'CAGR: {cagr:.2%}\nAvg Annual Return: {avg_annual_return:.2%}\nVolatility: {portfolio_volatility:.2%}',
+            f'CAGR: {cagr:.2%}\nAvg. Annual Return: {avg_annual_return:.2%}\nVolatility: {portfolio_volatility:.2%}',
             fontsize=12, 
             ha='center', 
             va='center',
