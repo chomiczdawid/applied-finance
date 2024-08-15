@@ -7,16 +7,59 @@ import seaborn as sns
 
 
 def get_stock_data(stocks, colnames, start, end, filename="prices"):
+    """
+    Downloads and stores historical stock price data.
+
+    This function fetches adjusted closing prices for a list of stocks within a specified date range and saves the data as a pickle file.
+
+    Parameters:
+    - `stocks` (list): A list of stock tickers to download data for.
+    - `colnames` (list): A list of column names corresponding to the stocks, used to rename the columns in the DataFrame.
+    - `start` (str or datetime): The start date for the data retrieval, formatted as 'YYYY-MM-DD'.
+    - `end` (str or datetime): The end date for the data retrieval, formatted as 'YYYY-MM-DD'.
+    - `filename` (str, optional): The name of the file (without extension) to save the data as a pickle file. Defaults to "prices".
+
+    Output:
+    - Downloads stock price data, renames the columns as specified, and saves the data to a pickle file named `<filename>.pkl`.
+    """
     prices = yf.download(stocks, start = start, end = end)['Adj Close']
     prices.columns = colnames
     prices.to_pickle("{}.pkl".format(filename))
     
 def load_data(filename="prices"):
+    """
+    Loads historical stock price data and calculates daily returns.
+
+    This function reads a previously saved pickle file containing stock price data, calculates daily percentage returns, and returns both the price and return DataFrames.
+
+    Parameters:
+    - `filename` (str, optional): The name of the pickle file (without extension) to load. Defaults to "prices".
+
+    Returns:
+    - `prices` (pd.DataFrame): A DataFrame containing the stock price data.
+    - `returns` (pd.DataFrame): A DataFrame containing the daily percentage returns for each stock.
+    """
     prices = pd.read_pickle("{}.pkl".format(filename))
     returns = prices.pct_change().dropna()
     return prices, returns
 
 def eda_stats(df):
+    """
+    Performs Exploratory Data Analysis (EDA) on a DataFrame of financial returns.
+
+    This function computes and displays various statistical metrics for each asset in the provided DataFrame, including:
+    1. **Average Annualized Return**: The mean return over a year, assuming 252 trading days.
+    2. **Annualized Volatility**: The standard deviation of returns over a year, reflecting risk.
+    3. **Skewness**: A measure of the asymmetry of the return distribution.
+    4. **Excess Kurtosis**: A measure of the "tailedness" of the return distribution. Positive excess kurtosis indicates heavy tails and higher risk.
+    5. **Shapiro-Wilk Test for Normality**: A statistical test that checks if returns are normally distributed. 
+
+    Parameters:
+    - `df` (pd.DataFrame): DataFrame containing daily returns of individual assets. Each column represents a different asset.
+
+    Output:
+    - Displays the computed statistics for each asset in the DataFrame.
+    """
     for column in df.columns:
         # Format the column name: replace underscores with spaces and capitalize the first letter of each word
         formatted_column_name = column.replace('_', ' ').title()
@@ -84,6 +127,22 @@ def corr_matrix_heatmap(correlation_matrix):
     plt.show()
 
 def daily_returns_dist_and_rolling_volatility(df, window=20):
+    """
+    Plots the daily returns distribution and rolling volatility for each asset in the DataFrame.
+
+    This function creates two subplots for each asset in the provided DataFrame:
+    1. **Daily Returns Distribution**: A histogram displaying the distribution of daily returns.
+    2. **Rolling Volatility**: A line plot showing the rolling volatility of the asset over a specified window of days.
+
+    Parameters:
+    - `df` (pd.DataFrame): DataFrame containing the daily returns of individual assets. Each column represents a different asset.
+    - `window` (int): The rolling window size (in trading days) used for calculating rolling volatility. Default is 20 days.
+
+    Output:
+    - Displays a series of figures, each containing two subplots for each asset:
+      - A histogram for daily returns distribution.
+      - A line plot for rolling volatility.
+    """
     # Iterating through all columns in the DataFrame
     for column in df.columns:
         # Modify the column name: replace underscores with spaces and capitalize
@@ -152,18 +211,18 @@ def plot_volatility_and_returns(returns):
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
 
-def plot_cumulative_returns(returns, weights, columns_to_plot, ax):
+def plot_cumulative_returns(returns, weights, benchmark, ax):
     """
-    Plots the cumulative returns of selected assets and an equal-weighted portfolio.
+    Plots the cumulative returns of the portfolio and a selected benchmark.
 
     Parameters:
     - returns: DataFrame containing the daily returns of individual assets.
     - weights: Array or list of weights for the portfolio.
-    - columns_to_plot: List of column names from the returns DataFrame to include in the plot.
+    - benchmark: String indicating which benchmark to plot ('S&P500' or '60/40').
     - ax: Matplotlib axis object on which to plot the cumulative returns.
     
     Output:
-    - Displays a plot of cumulative returns for selected assets and the portfolio.
+    - Displays a plot of cumulative returns for the portfolio and the chosen benchmark.
     """
     
     # Ensure the weights are a numpy array
@@ -172,17 +231,31 @@ def plot_cumulative_returns(returns, weights, columns_to_plot, ax):
     # Make a copy of the returns DataFrame to avoid modifying the original data
     returns_copy = returns.copy()
     
-    # Calculate the equal-weighted portfolio returns
+    # Calculate the portfolio returns
     returns_copy['Portfolio'] = returns_copy.dot(weights)
     
-    # Selecting columns to plot, including the portfolio
-    selected_columns = ['Portfolio'] + columns_to_plot
+    # Determine the benchmark returns
+    if benchmark == 'S&P500':
+        returns_copy['Benchmark'] = returns['large_cap_stocks']
+        benchmark_label = 'S&P500'
+    elif benchmark == '60/40':
+        returns_copy['Benchmark'] = 0.6 * returns['large_cap_stocks'] + 0.4 * returns['long_bonds']
+        benchmark_label = '60/40 Portfolio'
+    else:
+        raise ValueError("Invalid benchmark specified. Choose 'S&P500' or '60/40'.")
+    
+    # Selecting columns to plot, including the portfolio and benchmark
+    selected_columns = ['Portfolio', 'Benchmark']
     
     # Calculate cumulative returns
-    cum_returns = ((1 + returns_copy[selected_columns]).cumprod() - 1)
+    cum_returns = (1 + returns_copy[selected_columns]).cumprod() - 1
     
     # Capitalize column names and replace underscores with spaces for legend
     def format_label(label):
+        if label == 'Portfolio':
+            return 'Portfolio'
+        elif label == 'Benchmark':
+            return benchmark_label
         return label.replace('_', ' ').title()
     
     # Plotting cumulative returns
@@ -194,10 +267,13 @@ def plot_cumulative_returns(returns, weights, columns_to_plot, ax):
     ax.legend(handles, formatted_labels, loc='best')
     
     # Set plot title and labels
-    ax.set_title('Cumulative Returns of Selected Assets and Portfolio')
+    ax.set_title('Cumulative Returns of Portfolio and Benchmark', fontsize=14)
     ax.set_xlabel('Time')
     ax.set_ylabel('Cumulative Returns')
-    
+
+
+# Add calc_drawdowns    
+
 def plot_drawdowns(prices, weights, window, ax):
     """
     Plots the daily drawdown and maximum daily drawdown in a given time window for a portfolio.
@@ -231,7 +307,7 @@ def plot_drawdowns(prices, weights, window, ax):
     # ax.figure(figsize=(10, 5))
     ax.plot(daily_drawdown.index, daily_drawdown, label='Daily drawdown')
     ax.plot(max_daily_drawdown.index, max_daily_drawdown, label='Maximum daily drawdown in time-window')
-    ax.set_title('Daily Drawdown and Maximum Daily Drawdown')
+    ax.set_title('Daily Drawdown and Maximum Daily Drawdown', fontsize=14)
     ax.set_xlabel('Date')
     ax.set_ylabel('Drawdown')
     ax.legend()
@@ -251,27 +327,39 @@ def plot_portfolio_allocation(portfolio_weights, ax):
     colors = ['green', 'lightgreen', 'yellow', 'darkorange', 'orange']
     
     # Format labels: replace underscores with spaces and capitalize the first letter of each word
-    formatted_labels = [label.replace('_', ' ').title() for label in portfolio_weights.index]
+    formatted_labels = [label.replace('_weight', '').replace('_', ' ').title() for label in portfolio_weights.index]
     
     # Create a pie chart
     ax.pie(portfolio_weights, labels=formatted_labels, autopct='%1.1f%%', colors=colors, startangle=140)
     
     # Set the title
-    ax.set_title('Portfolio Allocation')
+    ax.set_title('Portfolio Allocation', fontsize=14)
 
-def display_summary(ax, returns, weights):
+def display_summary(ax, returns, weights, risk_free_rate=0.0, benchmark='S&P500'):
+    """
+    Displays a summary table with various portfolio statistics including CAGR, average annual return,
+    volatility, Sharpe ratio, Sortino ratio, maximum drawdown, alpha, and beta.
+
+    Parameters:
+    - ax: Matplotlib axis object on which to display the table.
+    - returns: DataFrame containing the daily returns of individual assets.
+    - weights: Array or list of weights for the portfolio.
+    - risk_free_rate: The risk-free rate (annualized).
+    
+    Output:
+    - Displays a table of portfolio statistics with a centered title.
+    """
+    
     # Ensure the weights are a numpy array
     weights = np.array(weights)
+    
     # Calculate the covariance matrix
     cov_mat = returns.cov()
-    # Annualize the co-variance matrix
-    cov_mat_annual = cov_mat*252
+    # Annualize the covariance matrix
+    cov_mat_annual = cov_mat * 252
     # Calculate the portfolio standard deviation (volatility)
     portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(cov_mat_annual, weights)))
-    
-    # Ensure weights is a pandas Series for proper indexing
-    if isinstance(weights, list):
-        weights = pd.Series(weights, index=returns.columns)
+
     # Calculate daily portfolio return as the dot product of daily returns and weights
     daily_portfolio_return = returns.dot(weights)
     # Calculate cumulative returns of the portfolio
@@ -284,24 +372,83 @@ def display_summary(ax, returns, weights):
     # Calculate CAGR
     cagr = (final_value ** (1 / num_years)) - 1
     
-    # t = relativedelta.relativedelta(returns.index.max(), returns.index.min()).years
-    # cagr = round(cum_returns.portfolio[-1] ** (1 / t) - 1, 4)
-    
     # Calculate average annual return
     avg_annual_return = returns.dot(weights).mean() * 252
     
-    # Display the text on the empty axis
-    ax.text(0.5, 0.5, 
-            f'CAGR: {cagr:.2%}\nAvg. Annual Return: {avg_annual_return:.2%}\nVolatility: {portfolio_volatility:.2%}',
-            fontsize=12, 
-            ha='center', 
-            va='center',
-            transform=ax.transAxes)
+    # Calculate Sharpe ratio
+    excess_returns = daily_portfolio_return - (risk_free_rate / 252)
+    sharpe_ratio = (avg_annual_return - risk_free_rate) / portfolio_volatility
+    
+    # Calculate Sortino ratio (assuming the risk-free rate is 0 and focusing on negative returns)
+    downside_deviation = np.sqrt(np.mean(np.minimum(0, excess_returns) ** 2)) * np.sqrt(252)
+    sortino_ratio = (avg_annual_return - risk_free_rate) / downside_deviation
+    
+    # Calculate maximum drawdown
+    drawdown = cumulative_returns / cumulative_returns.cummax() - 1
+    max_drawdown = drawdown.min()
+    
+    # Calculate benchmark returns based on the chosen benchmark
+    if benchmark == 'S&P500':
+        benchmark_returns = returns['large_cap_stocks']
+        benchmark_label = 'S&P500'
+    elif benchmark == '60/40':
+        benchmark_returns = 0.6 * returns['large_cap_stocks'] + 0.4 * returns['long_bonds']
+        benchmark_label = '60/40 Portfolio'
+    else:
+        raise ValueError("Invalid benchmark specified. Choose 'S&P500' or '60/40'.")
+    
+    # Calculate alpha and beta relative to the benchmark
+    beta = np.cov(daily_portfolio_return, benchmark_returns)[0, 1] / np.var(benchmark_returns)
+    alpha = avg_annual_return - (beta * (benchmark_returns.mean() * 252) + risk_free_rate)
+    alpha_annualized = ((1 + alpha) ** 252 - 1)
+
+    # Data for the table
+    table_data = [
+        ["CAGR", f"{cagr:.2%}"],
+        ["Avg. Annual Return", f"{avg_annual_return:.2%}"],
+        ["Volatility", f"{portfolio_volatility:.2%}"],
+        ["Max Drawdown", f"{max_drawdown:.2%}"],
+        ["Sharpe Ratio", f"{sharpe_ratio:.2f}"],
+        ["Sortino Ratio", f"{sortino_ratio:.2f}"],
+        ["Beta", f"{beta:.2f}"],
+        ["Alpha Annualized", f"{alpha_annualized:.2f}"]
+    ]
+    
+    # Display title above the table
+    ax.set_title('Portfolio Performance Summary', fontsize=14, pad=5) # , weight='bold'
+    
+    # Create table on axis
+    table = ax.table(cellText=table_data, colLabels=["Metric", "Value"], cellLoc="center", loc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(12)
+    table.scale(0.6, 1.5)  # Scale the table to be half the width of the figure
     
     # Remove axis lines and ticks
     ax.axis('off')
 
-def combine_plots(portfolio_weights, returns, weights, columns_to_plot, prices, window=252):
+def portfolio_analysis_dashboard(prices, portfolio_weights, returns, weights, benchmark='S&P500', risk_free_rate=0.0, window=252):
+    """
+    Creates a dashboard to visualize and analyze the performance of a portfolio.
+
+    This function generates a 2x2 grid layout with four subplots:
+    1. **Portfolio Allocation**: A pie chart showing the allocation of the portfolio across different assets.
+    2. **Cumulative Returns**: A line chart comparing the cumulative returns of the portfolio against a selected benchmark.
+    3. **Drawdowns**: A plot showing the drawdowns of the portfolio over time.
+    4. **Performance Summary**: A table summarizing key performance metrics including CAGR, Sharpe ratio, Sortino ratio, maximum drawdown, alpha, and beta.
+
+    Parameters:
+    - `prices` (pd.DataFrame): DataFrame containing the price data of the assets.
+    - `portfolio_weights` (pd.Series): Series containing the asset weights in the portfolio.
+    - `returns` (pd.DataFrame): DataFrame containing the daily returns of the assets.
+    - `weights` (array-like): Array or list of weights for the portfolio to calculate performance metrics.
+    - `benchmark` (str): The benchmark to compare the portfolio against. Options are 'S&P500' or '60/40'.
+    - `risk_free_rate` (float): The risk-free rate (annualized) used for performance metrics like Sharpe ratio and Sortino ratio. Default is 0.0.
+    - `window` (int): The rolling window size (in trading days) used for calculating rolling metrics like drawdowns. Default is 252 days (1 year).
+
+    Output:
+    - Displays a dashboard with four subplots, providing a comprehensive analysis of the portfolio's performance.
+    """
+    
     # Create a 2x2 grid layout
     fig, axs = plt.subplots(2, 2, figsize=(16, 8))
 
@@ -309,16 +456,16 @@ def combine_plots(portfolio_weights, returns, weights, columns_to_plot, prices, 
     plot_portfolio_allocation(portfolio_weights, ax=axs[0, 0])
     
     # Plot cumulative returns on the top right
-    plot_cumulative_returns(returns, weights, columns_to_plot, ax=axs[0, 1])
+    plot_cumulative_returns(returns, weights, benchmark, ax=axs[0, 1])
     
     # Plot drawdowns on the bottom right
     plot_drawdowns(prices, weights, window, ax=axs[1, 1])
 
     # Display summary on the bottom left subplot
-    display_summary(ax=axs[1, 0], returns=returns, weights=weights)
+    display_summary(ax=axs[1, 0], returns=returns, weights=weights, risk_free_rate=risk_free_rate, benchmark=benchmark)
     
     # Set a title for the entire figure
-    fig.suptitle('Portfolio Analysis', fontsize=22)
+    fig.suptitle('Portfolio Analysis Dashboard', fontsize=24)
     
     # Adjust layout for better spacing
     plt.tight_layout()
@@ -343,6 +490,7 @@ def create_portfolio_weights(returns, weights):
     portfolio_weights = pd.Series(weights, index=returns.columns)
     
     return portfolio_weights
+
 
 class EfficientFrontier:
     def __init__(self, risk_free, num_portfolios, returns):
