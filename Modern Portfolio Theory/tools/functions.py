@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.stats import skew, kurtosis, shapiro
+import statsmodels.formula.api as smf
 import yfinance as yf
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -210,7 +211,7 @@ def plot_volatility_and_returns(returns):
     fig.suptitle('Volatility and Expected Annual Returns of Assets', fontsize=16)
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
-
+    
 def plot_cumulative_returns(returns, weights, benchmark, ax):
     """
     Plots the cumulative returns of the portfolio and a selected benchmark.
@@ -259,7 +260,8 @@ def plot_cumulative_returns(returns, weights, benchmark, ax):
         return label.replace('_', ' ').title()
     
     # Plotting cumulative returns
-    cum_returns.plot(ax=ax)
+    cum_returns['Benchmark'].plot(ax=ax, color='grey', label='Benchmark')
+    cum_returns['Portfolio'].plot(ax=ax, color='green', label='Portfolio')
     
     # Update the legend with formatted labels
     handles, labels = ax.get_legend_handles_labels()
@@ -269,21 +271,24 @@ def plot_cumulative_returns(returns, weights, benchmark, ax):
     # Set plot title and labels
     ax.set_title('Cumulative Returns of Portfolio and Benchmark', fontsize=14)
     ax.set_xlabel('Time')
-    ax.set_ylabel('Cumulative Returns')
+    ax.set_ylabel('Cumulative Returns (%)')
+    
+    # Adjust the y-axis to show percentages
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.0%}'))
+    
+    # Enable grid lines on the y-axis for every tick
+    ax.yaxis.grid(True, linestyle='--', linewidth=0.5)
+    ax.xaxis.grid(False)  # Optionally, disable grid lines on the x-axis
 
-
-# Add calc_drawdowns    
-
-def plot_drawdowns(prices, weights, window, ax):
+def calc_drawdown(prices, weights, window):
     """
-    Plots the daily drawdown and maximum daily drawdown in a given time window for a portfolio.
+    Calculates the daily drawdown in a given time window for a portfolio.
 
     Parameters:
     - prices: DataFrame containing the price data of individual assets.
     - weights: Array or list of weights for the portfolio.
     - window: The time window for calculating the rolling maximum and drawdown (default is 250 days).
     """
-    
     # Ensure the weights are a numpy array
     weights = np.array(weights)
     
@@ -300,17 +305,43 @@ def plot_drawdowns(prices, weights, window, ax):
     # Calculate the daily drawdown
     daily_drawdown = pf_price / roll_max - 1.0
     
+    return daily_drawdown
+
+def plot_drawdowns(daily_drawdown, window, ax):
+    """
+    Plots the daily drawdown and maximum daily drawdown in a given time window for a portfolio.
+
+    Parameters:
+    - daily_drawdown: Series or DataFrame containing the daily drawdown data.
+    - window: The time window for calculating the rolling maximum and drawdown (default is 250 days).
+    - ax: The matplotlib axis object on which to plot.
+    """
+    
     # Calculate the maximum daily drawdown in the given time window
     max_daily_drawdown = daily_drawdown.rolling(min_periods=1, window=window).min()
-    
+
     # Plot the drawdowns
-    # ax.figure(figsize=(10, 5))
-    ax.plot(daily_drawdown.index, daily_drawdown, label='Daily drawdown')
-    ax.plot(max_daily_drawdown.index, max_daily_drawdown, label='Maximum daily drawdown in time-window')
+    ax.plot(daily_drawdown.index, daily_drawdown, label='Daily Drawdown', color='lightcoral')
+    ax.plot(max_daily_drawdown.index, max_daily_drawdown, label='Maximum Daily Drawdown in Time-Window', color='darkblue')
+
+    # Fill the area above the daily drawdown plot line with semi-transparent color
+    ax.fill_between(daily_drawdown.index, daily_drawdown, color='lightcoral', alpha=0.3)
+
+    # Set the title and labels
     ax.set_title('Daily Drawdown and Maximum Daily Drawdown', fontsize=14)
     ax.set_xlabel('Date')
-    ax.set_ylabel('Drawdown')
+    ax.set_ylabel('Drawdown (%)')
+
+    # Adjust the y-axis scale to percentages
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f'{x:.0%}'))
+
+    # Enable grid lines on the y-axis for every tick
+    ax.yaxis.grid(True, linestyle='--', linewidth=0.5)
+    ax.xaxis.grid(False)  # Optionally, disable grid lines on the x-axis
+
+    # Display the legend
     ax.legend()
+
 
 def plot_portfolio_allocation(portfolio_weights, ax):
     """
@@ -333,9 +364,9 @@ def plot_portfolio_allocation(portfolio_weights, ax):
     ax.pie(portfolio_weights, labels=formatted_labels, autopct='%1.1f%%', colors=colors, startangle=140)
     
     # Set the title
-    ax.set_title('Portfolio Allocation', fontsize=14)
+    ax.set_title('Asset Allocation', fontsize=14)
 
-def display_summary(ax, returns, weights, risk_free_rate=0.0, benchmark='S&P500'):
+def display_summary(prices, returns, weights, ax, risk_free_rate=0.0, benchmark='S&P500'):
     """
     Displays a summary table with various portfolio statistics including CAGR, average annual return,
     volatility, Sharpe ratio, Sortino ratio, maximum drawdown, alpha, and beta.
@@ -376,16 +407,15 @@ def display_summary(ax, returns, weights, risk_free_rate=0.0, benchmark='S&P500'
     avg_annual_return = returns.dot(weights).mean() * 252
     
     # Calculate Sharpe ratio
-    excess_returns = daily_portfolio_return - (risk_free_rate / 252)
     sharpe_ratio = (avg_annual_return - risk_free_rate) / portfolio_volatility
     
     # Calculate Sortino ratio (assuming the risk-free rate is 0 and focusing on negative returns)
+    excess_returns = daily_portfolio_return - (risk_free_rate / 252)
     downside_deviation = np.sqrt(np.mean(np.minimum(0, excess_returns) ** 2)) * np.sqrt(252)
     sortino_ratio = (avg_annual_return - risk_free_rate) / downside_deviation
     
     # Calculate maximum drawdown
-    drawdown = cumulative_returns / cumulative_returns.cummax() - 1
-    max_drawdown = drawdown.min()
+    max_drawdown = calc_drawdown(prices, weights, window=252).min()
     
     # Calculate benchmark returns based on the chosen benchmark
     if benchmark == 'S&P500':
@@ -397,9 +427,16 @@ def display_summary(ax, returns, weights, risk_free_rate=0.0, benchmark='S&P500'
     else:
         raise ValueError("Invalid benchmark specified. Choose 'S&P500' or '60/40'.")
     
-    # Calculate alpha and beta relative to the benchmark
-    beta = np.cov(daily_portfolio_return, benchmark_returns)[0, 1] / np.var(benchmark_returns)
-    alpha = avg_annual_return - (beta * (benchmark_returns.mean() * 252) + risk_free_rate)
+    # Calculate CAPM to the benchmark
+    benchmark_excess_returns = benchmark_returns - (risk_free_rate / 252)
+    
+    capm_data = pd.concat([excess_returns, benchmark_excess_returns], axis=1)
+    capm_data.columns = ['portfolio_excess', 'benchmark_excess']
+
+    capm_model = smf.ols(formula='portfolio_excess ~ benchmark_excess', data=capm_data).fit()
+    r_squared = capm_model.rsquared_adj
+    beta = capm_model.params['benchmark_excess']
+    alpha = capm_model.params['Intercept']
     alpha_annualized = ((1 + alpha) ** 252 - 1)
 
     # Data for the table
@@ -410,22 +447,23 @@ def display_summary(ax, returns, weights, risk_free_rate=0.0, benchmark='S&P500'
         ["Max Drawdown", f"{max_drawdown:.2%}"],
         ["Sharpe Ratio", f"{sharpe_ratio:.2f}"],
         ["Sortino Ratio", f"{sortino_ratio:.2f}"],
+        ["R-squared", f"{r_squared:.2f}"],
         ["Beta", f"{beta:.2f}"],
-        ["Alpha Annualized", f"{alpha_annualized:.2f}"]
+        ["Alpha", f"{alpha_annualized:.2f}"]
     ]
     
     # Display title above the table
-    ax.set_title('Portfolio Performance Summary', fontsize=14, pad=5) # , weight='bold'
+    ax.set_title('Performance Statistics and CAPM Parameters', fontsize=14, pad=6)  # , weight='bold'
     
     # Create table on axis
-    table = ax.table(cellText=table_data, colLabels=["Metric", "Value"], cellLoc="center", loc="center")
+    table = ax.table(cellText=table_data, cellLoc="center", loc="center")  # colLabels=["Metric", "Value"], 
     table.auto_set_font_size(False)
     table.set_fontsize(12)
     table.scale(0.6, 1.5)  # Scale the table to be half the width of the figure
     
     # Remove axis lines and ticks
     ax.axis('off')
-
+    
 def portfolio_analysis_dashboard(prices, portfolio_weights, returns, weights, benchmark='S&P500', risk_free_rate=0.0, window=252):
     """
     Creates a dashboard to visualize and analyze the performance of a portfolio.
@@ -459,10 +497,10 @@ def portfolio_analysis_dashboard(prices, portfolio_weights, returns, weights, be
     plot_cumulative_returns(returns, weights, benchmark, ax=axs[0, 1])
     
     # Plot drawdowns on the bottom right
-    plot_drawdowns(prices, weights, window, ax=axs[1, 1])
-
+    plot_drawdowns(calc_drawdown(prices, weights, window), window, ax=axs[1, 1])
+    
     # Display summary on the bottom left subplot
-    display_summary(ax=axs[1, 0], returns=returns, weights=weights, risk_free_rate=risk_free_rate, benchmark=benchmark)
+    display_summary(prices, returns, weights, risk_free_rate=risk_free_rate, benchmark=benchmark, ax=axs[1, 0])
     
     # Set a title for the entire figure
     fig.suptitle('Portfolio Analysis Dashboard', fontsize=24)
@@ -493,7 +531,7 @@ def create_portfolio_weights(returns, weights):
 
 
 class EfficientFrontier:
-    def __init__(self, risk_free, num_portfolios, returns):
+    def __init__(self, risk_free, num_portfolios, returns, min_asset_allocation):
         """
         Initializes the EfficientFrontier class with the risk-free rate, number of portfolios, and returns data.
         
@@ -505,9 +543,10 @@ class EfficientFrontier:
         self.risk_free = risk_free
         self.num_portfolios = num_portfolios
         self.returns = returns
+        self.min_asset_allocation = min_asset_allocation
         self.portfolios = None
         self._simulate_portfolios()
-    
+
     def _simulate_portfolios(self):
         """
         Simulates portfolios and calculates their returns, volatility, and Sharpe ratio.
@@ -525,28 +564,35 @@ class EfficientFrontier:
         # For each random portfolio, find the return and volatility
         for _ in range(self.num_portfolios):
             # Create random weights
-            weights = np.random.random(num_assets)
-            weights = weights / np.sum(weights)
+            while True:
+                weights = np.random.random(num_assets)
+                weights = weights / np.sum(weights)
+
+                # Enforce the condition that weights must be either 0 or at least 2.5%
+                if all(w == 0 or w >= self.min_asset_allocation for w in weights):
+                    break
+
             p_weights.append(weights)
-            
+
             # Calculate portfolio return
             ret = np.dot(weights, e_r)
             p_ret.append(ret)
-            
+
             # Calculate portfolio volatility
             var = cov_matrix.mul(weights, axis=0).mul(weights, axis=1).sum().sum()
             ann_sd = np.sqrt(var * 252)  # Using 252 trading days for annualization
             p_vol.append(ann_sd)
-        
+
         # Create DataFrame for portfolios
         data = {'returns': p_ret, 'volatility': p_vol}
         for counter, symbol in enumerate(df.columns.tolist()):
             data[symbol + '_weight'] = [w[counter] for w in p_weights]
-        
+
         self.portfolios = pd.DataFrame(data)
         self.portfolios['sharpe'] = (self.portfolios['returns'] - self.risk_free) / self.portfolios['volatility']
         self.portfolios = self.portfolios[list(df.columns + '_weight') + ['returns', 'volatility', 'sharpe']]
-    
+
+        
     def ef_df(self):
         """
         Returns the DataFrame of simulated portfolios.
