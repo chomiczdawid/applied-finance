@@ -6,6 +6,9 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+########################
+### Data preparation ###
+########################
 
 def get_stock_data(stocks, colnames, start, end, filename="prices"):
     """
@@ -24,6 +27,7 @@ def get_stock_data(stocks, colnames, start, end, filename="prices"):
     - Downloads stock price data, renames the columns as specified, and saves the data to a pickle file named `<filename>.pkl`.
     """
     prices = yf.download(stocks, start = start, end = end)['Adj Close']
+    prices = prices[stocks]
     prices.columns = colnames
     prices.to_pickle("{}.pkl".format(filename))
     
@@ -43,6 +47,10 @@ def load_data(filename="prices"):
     prices = pd.read_pickle("{}.pkl".format(filename))
     returns = prices.pct_change().dropna()
     return prices, returns
+
+#####################
+### Data Analysis ###
+#####################
 
 def eda_stats(df):
     """
@@ -211,8 +219,118 @@ def plot_volatility_and_returns(returns):
     fig.suptitle('Volatility and Expected Annual Returns of Assets', fontsize=16)
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.show()
+
+##############################
+### Portfolio Calculations ###
+##############################
     
-def plot_cumulative_returns(returns, weights, benchmark, ax):
+def create_portfolio_weights(returns, weights):
+    """
+    Creates a pandas Series representing portfolio weights.
+    
+    Parameters:
+    - returns (pd.DataFrame): DataFrame containing asset returns with column names as asset names.
+    - weights (list or array): List or array of weights corresponding to the columns in `returns`.
+    
+    Returns:
+    - pd.Series: Series representing the portfolio weights with asset names as the index.
+    """
+    # Ensure the number of weights matches the number of columns in returns
+    if len(weights) != len(returns.columns):
+        raise ValueError("The number of weights must match the number of assets (columns) in the returns DataFrame.")
+    
+    # Create the pandas Series
+    portfolio_weights = pd.Series(weights, index=returns.columns)
+    
+    return portfolio_weights
+
+# colors = ['darkorange', 'orange', 'darkgreen', 'green', 'seagreen', 'springgreen', 'lightgreen', 'darkkhaki', 'gold']
+
+def plot_portfolio_allocation(portfolio_weights, colors, ax):
+    """
+    Plots a pie chart of the investment portfolio allocation, excluding assets with zero weights.
+    
+    Parameters:
+    - portfolio_weights: pandas Series where index represents asset names and values represent weights.
+    - ax: Matplotlib Axes object to plot the pie chart on.
+    
+    Output:
+    - Displays a pie chart with the given portfolio allocation.
+    """
+    
+    # Filter out assets with zero weight
+    non_zero_weights = portfolio_weights[portfolio_weights > 0]
+
+    if non_zero_weights.empty:
+        raise ValueError("No assets with non-zero weights to plot.")
+
+    # Define color mapping: Ensure the number of colors matches the number of non-zero weights
+    if len(non_zero_weights) > len(colors):
+        raise ValueError("Not enough colors provided for the number of assets. Please add more colors.")
+
+    # Format labels: replace underscores with spaces and capitalize the first letter of each word
+    formatted_labels = [label.replace('_weight', '').replace('_', ' ').title() for label in non_zero_weights.index]
+
+    # Create a pie chart
+    ax.pie(non_zero_weights, labels=formatted_labels, autopct='%1.1f%%', colors=colors[:len(non_zero_weights)], startangle=90)
+    
+    # Set the title
+    ax.set_title('Asset Allocation', fontsize=14)
+
+def calculate_portfolio_values(returns, weights, rebalance_period_years):
+    """
+    Calculate portfolio values over time with periodic rebalancing.
+
+    Parameters:
+    - returns (pd.DataFrame): DataFrame with daily returns of assets.
+    - weights (list or np.array): Initial allocation weights for the assets.
+    - rebalance_period_years (int): Number of years after which to rebalance the portfolio.
+
+    Returns:
+    - pd.DataFrame: DataFrame with the value of each asset and the total portfolio value over time.
+    """
+    weights = np.array(weights)  # Ensure weights is a numpy array
+    initial_portfolio_value = 1.0  # Set initial portfolio value
+
+    # Create an empty DataFrame with the same columns as returns
+    portfolio_values = pd.DataFrame(index=returns.index, columns=returns.columns)
+    
+    # Calculate the date one day before the first date in returns
+    initial_date = returns.index[0] - pd.DateOffset(days=1)
+    
+    # Create a row with initial values based on weights
+    initial_investment = initial_portfolio_value * weights
+    initial_row = pd.Series(data=initial_investment, index=returns.columns, name=initial_date)
+    
+    # Insert the initial row into the DataFrame using pd.concat
+    portfolio_values = pd.concat([pd.DataFrame([initial_row]), portfolio_values])
+    portfolio_values = portfolio_values.sort_index()
+
+    # Initialize the year of the last rebalance
+    last_rebalance_year = returns.index[0].year
+
+    # Track the portfolio value over time
+    for i in range(1, len(portfolio_values.index)):
+        date = portfolio_values.index[i]
+
+        # Update the portfolio value for each asset based on the daily returns
+        if i == 1:  # For the first trading day after the initial row
+            portfolio_values.iloc[i] = portfolio_values.iloc[i-1] * (1 + returns.iloc[0])
+        else:
+            portfolio_values.iloc[i] = portfolio_values.iloc[i-1] * (1 + returns.iloc[i-1])
+
+        # Rebalance at the end of the rebalance period (e.g., every N years)
+        if (date.year - last_rebalance_year) >= rebalance_period_years and \
+           date.year != portfolio_values.index[min(i + 1, len(portfolio_values.index) - 1)].year:
+            total_portfolio_value = portfolio_values.iloc[i].sum()
+            portfolio_values.iloc[i] = total_portfolio_value * weights
+            last_rebalance_year = date.year
+
+    # Add the total portfolio value to the DataFrame
+    portfolio_values['Portfolio'] = portfolio_values.sum(axis=1)
+    return portfolio_values
+
+def plot_cumulative_returns(returns, weights, benchmark, rebalance_period_years, ax):
     """
     Plots the cumulative returns of the portfolio and a selected benchmark.
 
@@ -233,14 +351,15 @@ def plot_cumulative_returns(returns, weights, benchmark, ax):
     returns_copy = returns.copy()
     
     # Calculate the portfolio returns
-    returns_copy['Portfolio'] = returns_copy.dot(weights)
+    # returns_copy['Portfolio'] = returns_copy.dot(weights)
+    returns_copy['Portfolio'] = calculate_portfolio_values(returns, weights, rebalance_period_years)['Portfolio'].pct_change().dropna()
     
     # Determine the benchmark returns
     if benchmark == 'S&P500':
         returns_copy['Benchmark'] = returns['large_cap_stocks']
         benchmark_label = 'S&P500'
     elif benchmark == '60/40':
-        returns_copy['Benchmark'] = 0.6 * returns['large_cap_stocks'] + 0.4 * returns['long_bonds']
+        returns_copy['Benchmark'] = 0.6 * returns['large_cap_stocks'] + 0.4 * returns['bonds_20+']
         benchmark_label = '60/40 Portfolio'
     else:
         raise ValueError("Invalid benchmark specified. Choose 'S&P500' or '60/40'.")
@@ -293,11 +412,7 @@ def calc_drawdown(prices, weights, window):
     weights = np.array(weights)
     
     # Make a copy of the prices DataFrame to avoid modifying the original data
-    prices_copy = prices.copy()
-    
-    # Calculate the equal-weighted portfolio price series
-    prices_copy['portfolio'] = prices_copy.dot(weights)
-    pf_price = prices_copy['portfolio']
+    pf_price = prices.copy()
     
     # Calculate the rolling maximum price
     roll_max = pf_price.rolling(min_periods=1, window=window).max()
@@ -341,31 +456,7 @@ def plot_drawdowns(daily_drawdown, window, ax):
 
     # Display the legend
     ax.legend()
-
-
-def plot_portfolio_allocation(portfolio_weights, ax):
-    """
-    Plots a pie chart of the investment portfolio allocation with specific color mapping.
     
-    Parameters:
-    - portfolio_weights: pandas Series where index represents asset names and values represent weights.
-    
-    Output:
-    - Displays a pie chart with the given portfolio allocation.
-    """
-    
-    # Define color mapping: green shades for bonds, orange shades for stocks, and yellow for gold
-    colors = ['green', 'lightgreen', 'yellow', 'darkorange', 'orange']
-    
-    # Format labels: replace underscores with spaces and capitalize the first letter of each word
-    formatted_labels = [label.replace('_weight', '').replace('_', ' ').title() for label in portfolio_weights.index]
-    
-    # Create a pie chart
-    ax.pie(portfolio_weights, labels=formatted_labels, autopct='%1.1f%%', colors=colors, startangle=140)
-    
-    # Set the title
-    ax.set_title('Asset Allocation', fontsize=14)
-
 def display_summary(prices, returns, weights, ax, risk_free_rate=0.0, benchmark='S&P500'):
     """
     Displays a summary table with various portfolio statistics including CAGR, average annual return,
@@ -380,6 +471,8 @@ def display_summary(prices, returns, weights, ax, risk_free_rate=0.0, benchmark=
     Output:
     - Displays a table of portfolio statistics with a centered title.
     """
+    daily_portfolio_return = returns['Portfolio']
+    returns = returns.drop('Portfolio', axis=1)
     
     # Ensure the weights are a numpy array
     weights = np.array(weights)
@@ -392,7 +485,7 @@ def display_summary(prices, returns, weights, ax, risk_free_rate=0.0, benchmark=
     portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(cov_mat_annual, weights)))
 
     # Calculate daily portfolio return as the dot product of daily returns and weights
-    daily_portfolio_return = returns.dot(weights)
+    # daily_portfolio_return = returns.dot(weights)
     # Calculate cumulative returns of the portfolio
     cumulative_returns = (1 + daily_portfolio_return).cumprod()
     # Get the final cumulative return
@@ -404,7 +497,8 @@ def display_summary(prices, returns, weights, ax, risk_free_rate=0.0, benchmark=
     cagr = (final_value ** (1 / num_years)) - 1
     
     # Calculate average annual return
-    avg_annual_return = returns.dot(weights).mean() * 252
+    # avg_annual_return = returns.dot(weights).mean() * 252
+    avg_annual_return = daily_portfolio_return.mean() * 252
     
     # Calculate Sharpe ratio
     sharpe_ratio = (avg_annual_return - risk_free_rate) / portfolio_volatility
@@ -422,7 +516,7 @@ def display_summary(prices, returns, weights, ax, risk_free_rate=0.0, benchmark=
         benchmark_returns = returns['large_cap_stocks']
         benchmark_label = 'S&P500'
     elif benchmark == '60/40':
-        benchmark_returns = 0.6 * returns['large_cap_stocks'] + 0.4 * returns['long_bonds']
+        benchmark_returns = 0.6 * returns['large_cap_stocks'] + 0.4 * returns['bonds_20+']
         benchmark_label = '60/40 Portfolio'
     else:
         raise ValueError("Invalid benchmark specified. Choose 'S&P500' or '60/40'.")
@@ -464,7 +558,7 @@ def display_summary(prices, returns, weights, ax, risk_free_rate=0.0, benchmark=
     # Remove axis lines and ticks
     ax.axis('off')
     
-def portfolio_analysis_dashboard(prices, portfolio_weights, returns, weights, benchmark='S&P500', risk_free_rate=0.0, window=252):
+def portfolio_analysis_dashboard(portfolio_weights, returns, weights, colors, benchmark='S&P500', risk_free_rate=0.0, rebalance_period_years=1, window=252):
     """
     Creates a dashboard to visualize and analyze the performance of a portfolio.
 
@@ -475,7 +569,6 @@ def portfolio_analysis_dashboard(prices, portfolio_weights, returns, weights, be
     4. **Performance Summary**: A table summarizing key performance metrics including CAGR, Sharpe ratio, Sortino ratio, maximum drawdown, alpha, and beta.
 
     Parameters:
-    - `prices` (pd.DataFrame): DataFrame containing the price data of the assets.
     - `portfolio_weights` (pd.Series): Series containing the asset weights in the portfolio.
     - `returns` (pd.DataFrame): DataFrame containing the daily returns of the assets.
     - `weights` (array-like): Array or list of weights for the portfolio to calculate performance metrics.
@@ -486,21 +579,22 @@ def portfolio_analysis_dashboard(prices, portfolio_weights, returns, weights, be
     Output:
     - Displays a dashboard with four subplots, providing a comprehensive analysis of the portfolio's performance.
     """
+    prices = calculate_portfolio_values(returns, weights, rebalance_period_years)['Portfolio'].iloc[1:]
     
     # Create a 2x2 grid layout
     fig, axs = plt.subplots(2, 2, figsize=(16, 8))
 
     # Plot portfolio allocation on the left
-    plot_portfolio_allocation(portfolio_weights, ax=axs[0, 0])
+    plot_portfolio_allocation(portfolio_weights, colors, ax=axs[0, 0])
     
     # Plot cumulative returns on the top right
-    plot_cumulative_returns(returns, weights, benchmark, ax=axs[0, 1])
+    plot_cumulative_returns(returns, weights, benchmark, rebalance_period_years, ax=axs[0, 1])
     
     # Plot drawdowns on the bottom right
     plot_drawdowns(calc_drawdown(prices, weights, window), window, ax=axs[1, 1])
     
     # Display summary on the bottom left subplot
-    display_summary(prices, returns, weights, risk_free_rate=risk_free_rate, benchmark=benchmark, ax=axs[1, 0])
+    display_summary(prices, returns=calculate_portfolio_values(returns, weights, rebalance_period_years).pct_change().fillna(0).iloc[1:], weights=weights, risk_free_rate=risk_free_rate, benchmark=benchmark, ax=axs[1, 0])
     
     # Set a title for the entire figure
     fig.suptitle('Portfolio Analysis Dashboard', fontsize=24)
@@ -509,26 +603,9 @@ def portfolio_analysis_dashboard(prices, portfolio_weights, returns, weights, be
     plt.tight_layout()
     plt.show()
 
-def create_portfolio_weights(returns, weights):
-    """
-    Creates a pandas Series representing portfolio weights.
-    
-    Parameters:
-    - returns (pd.DataFrame): DataFrame containing asset returns with column names as asset names.
-    - weights (list or array): List or array of weights corresponding to the columns in `returns`.
-    
-    Returns:
-    - pd.Series: Series representing the portfolio weights with asset names as the index.
-    """
-    # Ensure the number of weights matches the number of columns in returns
-    if len(weights) != len(returns.columns):
-        raise ValueError("The number of weights must match the number of assets (columns) in the returns DataFrame.")
-    
-    # Create the pandas Series
-    portfolio_weights = pd.Series(weights, index=returns.columns)
-    
-    return portfolio_weights
-
+##########################
+### Efficient Frontier ###
+##########################
 
 class EfficientFrontier:
     def __init__(self, risk_free, num_portfolios, returns, min_asset_allocation):
